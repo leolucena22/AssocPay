@@ -11,7 +11,6 @@ export default function LoginPage() {
   const router = useRouter();
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -43,26 +42,12 @@ export default function LoginPage() {
             Área do Coordenador
           </h1>
           <p className="text-sm text-muted-foreground">
-            Entre com suas credenciais para acessar o painel
+            Digite a senha para acessar o painel
           </p>
         </div>
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="space-y-5">
-          <div className="space-y-2">
-            <Label htmlFor="email" className="text-sm font-medium">
-              E-mail
-            </Label>
-            <Input
-              id="email"
-              type="email"
-              placeholder="admin@associacao.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              className="h-11"
-            />
-          </div>
 
           <div className="space-y-2">
             <Label htmlFor="password" className="text-sm font-medium">

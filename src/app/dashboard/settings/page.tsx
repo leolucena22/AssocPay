@@ -88,7 +88,7 @@ export default function SettingsPage() {
                   </>
                 ) : (
                   <>
-                    <Save className="mr-2 h-4 w-4" />
+                    <Save className="mr-2 h-4 w-4 text-black" />
                     Salvar Alterações
                   </>
                 )}
@@ -188,7 +188,7 @@ export default function SettingsPage() {
                   </>
                 ) : (
                   <>
-                    <Save className="mr-2 h-4 w-4" />
+                    <Save className="mr-2 h-4 w-4 text-black" />
                     Salvar Configurações
                   </>
                 )}
@@ -251,24 +251,13 @@ export default function SettingsPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="admin-name">Nome</Label>
-                  <Input
-                    id="admin-name"
-                    defaultValue="Coordenador"
-                    className="h-10"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="admin-email">E-mail</Label>
-                  <Input
-                    id="admin-email"
-                    type="email"
-                    defaultValue="admin@assocpay.com"
-                    className="h-10"
-                  />
-                </div>
+              <div className="space-y-2">
+                <Label htmlFor="admin-name">Nome</Label>
+                <Input
+                  id="admin-name"
+                  defaultValue="Coordenador"
+                  className="h-10"
+                />
               </div>
               <Separator />
               <h4 className="text-sm font-semibold">Alterar Senha</h4>
@@ -314,7 +303,7 @@ export default function SettingsPage() {
                   </>
                 ) : (
                   <>
-                    <Save className="mr-2 h-4 w-4" />
+                    <Save className="mr-2 h-4 w-4 text-black" />
                     Salvar Conta
                   </>
                 )}
