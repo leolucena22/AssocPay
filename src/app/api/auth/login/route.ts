@@ -1,35 +1,43 @@
-import { NextRequest, NextResponse } from "next/server";
-import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
-import { supabaseAdmin } from "@/app/lib/prisma";
+import type { NextRequest } from "next/server";
+import { comparePassword, generateToken } from "@/lib/auth/auth";
+import { success } from "@/lib/api/success";
+import { error } from "@/lib/api/error";
+import prisma from "@/lib/prisma";
 
-export async function POST(req: NextRequest) {
-  const { password } = await req.json();
+export async function POST(request: NextRequest): Promise<Response> {
+  let body: { password?: unknown };
 
-  if (!password) {
-    return NextResponse.json({ error: "Password required" }, { status: 400 });
+  try {
+    body = await request.json();
+  } catch {
+    return error("Invalid request body", 400);
   }
 
-  const { data: coordinator, error } = await supabaseAdmin
-    .from("coordinators")
-    .select("*")
-    .single();
+  const { password } = body;
 
-  if (error || !coordinator) {
-    return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
+  if (typeof password !== "string" || password.trim() === "") {
+    return error("Invalid credentials", 400);
   }
 
-  const valid = await bcrypt.compare(password, coordinator.password);
+  try {
+    const coordinator = await prisma.coordinator.findFirst({
+      select: { id: true, password: true },
+    });
 
-  if (!valid) {
-    return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
+    if (!coordinator) {
+      return error("Invalid credentials", 400);
+    }
+
+    const valid = await comparePassword(password, coordinator.password);
+
+    if (!valid) {
+      return error("Invalid credentials", 400);
+    }
+
+    const token = generateToken(coordinator.id);
+
+    return success({ token, coordinatorId: coordinator.id });
+  } catch {
+    return error("Internal server error", 500);
   }
-
-  const token = jwt.sign(
-    { coordinatorId: coordinator.id },
-    process.env.JWT_SECRET!,
-    { expiresIn: "7d" }
-  );
-
-  return NextResponse.json({ token, coordinatorId: coordinator.id });
 }
