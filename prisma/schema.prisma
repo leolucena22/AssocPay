@@ -80,12 +80,30 @@ model Payment {
   overdue    Boolean       @default(false)
   amount     Decimal       @default(0) @db.Decimal(10, 2)
   notes      String?
-  receiptUrl String?       @map("receipt_url")
   createdAt  DateTime      @default(now()) @map("created_at")
 
-  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
-  month  Month  @relation(fields: [monthId], references: [id], onDelete: Cascade)
+  member   Member    @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  month    Month     @relation(fields: [monthId], references: [id], onDelete: Cascade)
+  receipts Receipt[]
 
   @@unique([memberId, monthId])
   @@map("payments")
 }
+
+model Receipt {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  paymentId    String    @db.Uuid @map("payment_id")
+  fileUrl      String    @map("file_url")
+  originalName String    @map("original_name")
+  mimeType     String    @map("mime_type")
+  fileSize     Int       @map("file_size")
+  uploadedAt   DateTime  @default(now()) @map("uploaded_at")
+  deletedAt    DateTime? @map("deleted_at")
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId])
+  @@index([uploadedAt])
+  @@index([deletedAt])
+  @@map("receipts")
+}

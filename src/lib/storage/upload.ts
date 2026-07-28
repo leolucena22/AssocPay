@@ -3,11 +3,24 @@ import { RECEIPTS_BUCKET, SIGNED_URL_EXPIRES_IN } from "./constants";
 import { generateReceiptPath } from "./path";
 import { compressReceiptFile } from "./compress";
 import type { AllowedMimeType } from "./constants";
+import prisma from "@/lib/prisma";
 
 // ─── Result types ─────────────────────────────────────────────────────────────
 
 export type UploadResult =
-  | { ok: true; storagePath: string }
+  | {
+      ok: true;
+      storagePath: string;
+      receipt: {
+        id: string;
+        paymentId: string;
+        fileUrl: string;
+        originalName: string;
+        mimeType: string;
+        fileSize: number;
+        uploadedAt: Date;
+      };
+    }
   | { ok: false; message: string };
 
 export type SignedUrlResult =
@@ -21,14 +34,15 @@ export type RemoveResult =
 // ─── Upload ───────────────────────────────────────────────────────────────────
 
 /**
- * Uploads a receipt file to the private Supabase Storage bucket.
+ * Uploads a receipt file to the private Supabase Storage bucket and creates a Receipt record.
  *
  * Steps:
  * 1. Generates a secure, unpredictable storage path (no personal data).
  * 2. Compresses images; PDFs pass through unchanged.
  * 3. Uploads with `upsert: false` to prevent overwriting existing files.
+ * 4. Creates a Receipt entry in Prisma database with metadata.
  *
- * Returns the storage path on success (store this in the database, not a URL).
+ * Returns the storage path and created receipt object on success.
  * Returns an error message on failure.
  *
  * @param paymentId  UUID of the payment (used to scope the path).
@@ -45,19 +59,38 @@ export async function uploadReceiptFile(
     const compressed = await compressReceiptFile(rawBuffer, mimeType);
     const storagePath = generateReceiptPath(paymentId, mimeType);
 
-    const { error } = await storage
+    const { error: uploadError } = await storage
       .from(RECEIPTS_BUCKET)
       .upload(storagePath, compressed, {
         contentType: mimeType,
         upsert: false, // Prevent overwriting — each upload always gets a new path.
       });
 
-    if (error) {
-      console.error("[storage] Upload failed:", error.message);
+    if (uploadError) {
+      console.error("[storage] Upload failed:", uploadError.message);
       return { ok: false, message: "Failed to upload file" };
     }
 
-    return { ok: true, storagePath };
+    const receipt = await prisma.receipt.create({
+      data: {
+        paymentId,
+        fileUrl: storagePath,
+        originalName: file.name,
+        mimeType,
+        fileSize: file.size,
+      },
+      select: {
+        id: true,
+        paymentId: true,
+        fileUrl: true,
+        originalName: true,
+        mimeType: true,
+        fileSize: true,
+        uploadedAt: true,
+      },
+    });
+
+    return { ok: true, storagePath, receipt };
   } catch (err) {
     console.error("[storage] Unexpected error during upload:", err);
     return { ok: false, message: "Failed to upload file" };

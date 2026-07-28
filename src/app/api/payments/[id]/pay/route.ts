@@ -68,7 +68,16 @@ export async function POST(
     // 1. Locate payment & validate existence
     const payment = await prisma.payment.findUnique({
       where: { id },
-      select: { id: true, status: true, receiptUrl: true },
+      select: {
+        id: true,
+        status: true,
+        receipts: {
+          where: { deletedAt: null },
+          orderBy: { uploadedAt: "desc" },
+          take: 1,
+          select: { fileUrl: true },
+        },
+      },
     });
 
     if (!payment) {
@@ -98,10 +107,11 @@ export async function POST(
     }
 
     // 4. Prevent reuse of receipt_url across different payments
-    const existingReceipt = await prisma.payment.findFirst({
+    const existingReceipt = await prisma.receipt.findFirst({
       where: {
-        receiptUrl: receipt_url,
-        NOT: { id },
+        fileUrl: receipt_url,
+        paymentId: { not: id },
+        deletedAt: null,
       },
     });
 
@@ -113,8 +123,9 @@ export async function POST(
     }
 
     // 5. Clean up old receipt file from storage if previously rejected and resubmitting a new one
-    if (payment.receiptUrl && payment.receiptUrl !== receipt_url) {
-      const oldStoragePath = extractStoragePath(payment.receiptUrl);
+    const latestReceipt = payment.receipts[0];
+    if (latestReceipt && latestReceipt.fileUrl !== receipt_url) {
+      const oldStoragePath = extractStoragePath(latestReceipt.fileUrl);
       if (oldStoragePath) {
         // Fire and forget removal — non-blocking, error logged internally
         removeReceiptFile(oldStoragePath).catch((err) =>
@@ -128,14 +139,12 @@ export async function POST(
       where: { id },
       data: {
         notes: notes ?? null,
-        receiptUrl: receipt_url,
         status: "under_review",
       },
       select: {
         id: true,
         status: true,
         notes: true,
-        receiptUrl: true,
       },
     });
 
@@ -148,7 +157,7 @@ export async function POST(
       id: updatedPayment.id,
       status: updatedPayment.status,
       notes: updatedPayment.notes,
-      receipt_url: updatedPayment.receiptUrl,
+      receipt_url: receipt_url,
     });
   } catch (err) {
     console.error("[POST /payments/:id/pay] Error:", err);

@@ -21,7 +21,6 @@ const createSchema = z.object({
   overdue: z.boolean().optional(),
   amount: z.number().min(0, "amount must be positive").optional(),
   notes: z.string().nullable().optional(),
-  receipt_url: z.string().nullable().optional(),
 });
 
 const listQuerySchema = z.object({
@@ -40,8 +39,8 @@ const listQuerySchema = z.object({
  * Creates a new payment.
  * Requires coordinator authentication.
  *
- * Body: { member_id, month_id, status?, overdue?, amount?, notes?, receipt_url? }
- * Returns: 201 { id, member_id, month_id, status, overdue, amount, notes, receipt_url, created_at }
+ * Body: { member_id, month_id, status?, overdue?, amount?, notes? }
+ * Returns: 201 { id, member_id, month_id, status, overdue, amount, notes, created_at }
  */
 export async function POST(request: NextRequest): Promise<Response> {
   const auth = await getAuthenticatedCoordinator(request);
@@ -61,8 +60,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     return error(parsed.error.issues[0].message, 400);
   }
 
-  const { member_id, month_id, status, overdue, amount, notes, receipt_url } =
-    parsed.data;
+  const { member_id, month_id, status, overdue, amount, notes } = parsed.data;
 
   try {
     const payment = await prisma.payment.create({
@@ -73,7 +71,6 @@ export async function POST(request: NextRequest): Promise<Response> {
         ...(overdue !== undefined ? { overdue } : {}),
         ...(amount !== undefined ? { amount } : {}),
         ...(notes !== undefined ? { notes } : {}),
-        ...(receipt_url !== undefined ? { receiptUrl: receipt_url } : {}),
       },
       select: {
         id: true,
@@ -83,7 +80,6 @@ export async function POST(request: NextRequest): Promise<Response> {
         overdue: true,
         amount: true,
         notes: true,
-        receiptUrl: true,
         createdAt: true,
       },
     });
@@ -99,7 +95,6 @@ export async function POST(request: NextRequest): Promise<Response> {
         overdue: payment.overdue,
         amount: Number(payment.amount),
         notes: payment.notes,
-        receipt_url: payment.receiptUrl,
         created_at: payment.createdAt,
       },
       201
@@ -187,8 +182,13 @@ export async function GET(request: NextRequest): Promise<Response> {
           overdue: true,
           amount: true,
           notes: true,
-          receiptUrl: true,
           createdAt: true,
+          receipts: {
+            where: { deletedAt: null },
+            orderBy: { uploadedAt: "desc" },
+            take: 1,
+            select: { fileUrl: true },
+          },
         },
         orderBy: { createdAt: "desc" },
         skip: (page - 1) * limit,
@@ -206,8 +206,8 @@ export async function GET(request: NextRequest): Promise<Response> {
         overdue: boolean;
         amount: { toNumber(): number } | number;
         notes: string | null;
-        receiptUrl: string | null;
         createdAt: Date;
+        receipts: { fileUrl: string }[];
       }) => ({
         id: p.id,
         member_id: p.memberId,
@@ -216,7 +216,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         overdue: p.overdue,
         amount: Number(p.amount),
         notes: p.notes,
-        receipt_url: p.receiptUrl,
+        receipt_url: p.receipts[0]?.fileUrl ?? null,
         created_at: p.createdAt,
       })
     );

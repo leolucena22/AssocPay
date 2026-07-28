@@ -82,8 +82,13 @@ export async function GET(
         overdue: true,
         amount: true,
         notes: true,
-        receiptUrl: true,
         createdAt: true,
+        receipts: {
+          where: { deletedAt: null },
+          orderBy: { uploadedAt: "desc" },
+          take: 1,
+          select: { fileUrl: true },
+        },
       },
     });
 
@@ -99,7 +104,7 @@ export async function GET(
       overdue: payment.overdue,
       amount: Number(payment.amount),
       notes: payment.notes,
-      receipt_url: payment.receiptUrl,
+      receipt_url: payment.receipts[0]?.fileUrl ?? null,
       created_at: payment.createdAt,
     };
 
@@ -151,7 +156,7 @@ export async function PATCH(
     return error(parsed.error.issues[0].message, 400);
   }
 
-  const { status, overdue, amount, notes, receipt_url } = parsed.data;
+  const { status, overdue, amount, notes } = parsed.data;
 
   try {
     // 1. Locate payment & check current status
@@ -191,7 +196,6 @@ export async function PATCH(
         ...(overdue !== undefined ? { overdue } : {}),
         ...(amount !== undefined ? { amount } : {}),
         ...(notes !== undefined ? { notes } : {}),
-        ...(receipt_url !== undefined ? { receiptUrl: receipt_url } : {}),
       },
       select: {
         id: true,
@@ -201,8 +205,13 @@ export async function PATCH(
         overdue: true,
         amount: true,
         notes: true,
-        receiptUrl: true,
         createdAt: true,
+        receipts: {
+          where: { deletedAt: null },
+          orderBy: { uploadedAt: "desc" },
+          take: 1,
+          select: { fileUrl: true },
+        },
       },
     });
 
@@ -217,7 +226,7 @@ export async function PATCH(
       overdue: payment.overdue,
       amount: Number(payment.amount),
       notes: payment.notes,
-      receipt_url: payment.receiptUrl,
+      receipt_url: payment.receipts[0]?.fileUrl ?? null,
       created_at: payment.createdAt,
     });
   } catch (err) {
@@ -256,16 +265,21 @@ export async function DELETE(
   try {
     const payment = await prisma.payment.findUnique({
       where: { id },
-      select: { receiptUrl: true },
+      select: {
+        receipts: {
+          where: { deletedAt: null },
+          select: { fileUrl: true },
+        },
+      },
     });
 
     if (!payment) {
       return error("Payment not found", 404);
     }
 
-    // Clean up associated file from storage if present
-    if (payment.receiptUrl) {
-      const storagePath = extractStoragePath(payment.receiptUrl);
+    // Clean up associated files from storage if present
+    for (const r of payment.receipts) {
+      const storagePath = extractStoragePath(r.fileUrl);
       if (storagePath) {
         await removeReceiptFile(storagePath).catch((err) =>
           console.error("[storage] Failed to remove file on payment delete:", err)
