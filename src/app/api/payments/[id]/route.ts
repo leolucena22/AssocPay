@@ -108,8 +108,14 @@ export async function GET(
 /**
  * PATCH /api/payments/:id
  *
- * Simple administrative update of a payment record.
+ * Administrative update of a payment record (Approval / Rejection flow).
  * Requires coordinator authentication.
+ *
+ * Allowed status transitions:
+ *   under_review -> confirmed  (Approval - flow completed)
+ *   under_review -> pending    (Rejection - resets status to pending for re-submission)
+ *
+ * Any other transition (e.g. pending -> confirmed, confirmed -> pending, etc.) is blocked.
  *
  * Body: { status?, overdue?, amount?, notes?, receipt_url? }
  * Returns: 200 { id, member_id, month_id, status, overdue, amount, notes, receipt_url, created_at }
@@ -140,6 +146,36 @@ export async function PATCH(
   const { status, overdue, amount, notes, receipt_url } = parsed.data;
 
   try {
+    // 1. Locate payment & check current status
+    const existingPayment = await prisma.payment.findUnique({
+      where: { id },
+      select: { id: true, status: true },
+    });
+
+    if (!existingPayment) {
+      return error("Payment not found", 404);
+    }
+
+    // 2. Closed flow rule: confirmed payments cannot be modified
+    if (existingPayment.status === "confirmed") {
+      return error("Cannot modify a confirmed payment", 400);
+    }
+
+    // 3. Status transition validation
+    if (status !== undefined) {
+      // Only under_review -> confirmed or under_review -> pending is allowed
+      if (
+        existingPayment.status !== "under_review" ||
+        (status !== "confirmed" && status !== "pending")
+      ) {
+        return error(
+          "Invalid status transition. Status can only transition from under_review to confirmed or pending",
+          400
+        );
+      }
+    }
+
+    // 4. Perform update
     const payment = await prisma.payment.update({
       where: { id },
       data: {
