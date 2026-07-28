@@ -1,0 +1,91 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum MemberType {
+  Regular
+  Fee
+}
+
+enum PaymentStatus {
+  pending
+  under_review
+  confirmed
+}
+
+model Coordinator {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  password  String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("coordinators")
+}
+
+model Institution {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  members Member[]
+
+  @@map("institutions")
+}
+
+model Member {
+  id            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name          String
+  phone         String?
+  type          MemberType
+  active        Boolean      @default(true)
+  institutionId String?      @db.Uuid @map("institution_id")
+  createdAt     DateTime     @default(now()) @map("created_at")
+
+  institution Institution? @relation(fields: [institutionId], references: [id], onDelete: SetNull)
+  payments    Payment[]
+
+  @@map("members")
+}
+
+model Month {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  date           DateTime  @db.Date
+  regularAmount  Decimal   @default(0) @db.Decimal(10, 2) @map("regular_amount")
+  feeAmount      Decimal   @default(0) @db.Decimal(10, 2) @map("fee_amount")
+  lateFee        Decimal   @default(0) @db.Decimal(10, 2) @map("late_fee")
+  total          Decimal   @default(0) @db.Decimal(10, 2)
+  expectedAmount Decimal   @default(0) @db.Decimal(10, 2) @map("expected_amount")
+  dueDate        DateTime  @db.Date @map("due_date")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  payments Payment[]
+
+  @@map("months")
+}
+
+model Payment {
+  id         String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  memberId   String        @db.Uuid @map("member_id")
+  monthId    String        @db.Uuid @map("month_id")
+  status     PaymentStatus @default(pending)
+  overdue    Boolean       @default(false)
+  amount     Decimal       @default(0) @db.Decimal(10, 2)
+  notes      String?
+  receiptUrl String?       @map("receipt_url")
+  createdAt  DateTime      @default(now()) @map("created_at")
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  month  Month  @relation(fields: [monthId], references: [id], onDelete: Cascade)
+
+  @@unique([memberId, monthId])
+  @@map("payments")
+}
