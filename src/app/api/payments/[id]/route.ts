@@ -4,7 +4,6 @@ import { getAuthenticatedCoordinator } from "@/lib/auth/auth";
 import { success } from "@/lib/api/success";
 import { error } from "@/lib/api/error";
 import { cache } from "@/lib/cache";
-import { removeReceiptFile } from "@/lib/storage";
 import prisma from "@/lib/prisma";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -17,40 +16,31 @@ const CACHE_TTL_SECONDS = 120; // 2 minutes
 
 const updateSchema = z
   .object({
-    status: z.enum(["pending", "under_review", "confirmed"]).optional(),
+    status: z
+      .enum(["pending", "under_review", "confirmed", "rejected"])
+      .optional(),
     overdue: z.boolean().optional(),
     amount: z.number().min(0, "amount must be positive").optional(),
     notes: z.string().nullable().optional(),
-    receipt_url: z.string().nullable().optional(),
   })
   .refine((data) => Object.keys(data).length > 0, {
     message: "at least one field must be provided",
   });
-
-// ─── Helper: extract storage path from signed/public URL ─────────────────────
-
-function extractStoragePath(url: string): string | null {
-  const match = url.match(/payments\/[^?]+/);
-  return match ? match[0] : null;
-}
 
 // ─── GET /api/payments/[id] ───────────────────────────────────────────────────
 
 /**
  * GET /api/payments/:id
  *
- * Returns the detail of a single payment.
- * Requires coordinator authentication.
+ * Returns the detail of a single payment including all active receipts.
+ * Publicly accessible endpoint.
  *
- * Returns: 200 { id, member_id, month_id, status, overdue, amount, notes, receipt_url, created_at }
+ * Returns: 200 { id, member_id, month_id, status, overdue, amount, notes, receipts: [...], created_at }
  */
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ): Promise<Response> {
-  const auth = await getAuthenticatedCoordinator(request);
-  if (auth instanceof Response) return auth;
-
   const { id } = await params;
 
   const cacheKey = `${CACHE_DETAIL_PREFIX}${id}`;
@@ -63,7 +53,13 @@ export async function GET(
     overdue: boolean;
     amount: number;
     notes: string | null;
-    receipt_url: string | null;
+    receipts: Array<{
+      id: string;
+      original_name: string;
+      mime_type: string;
+      file_size: number;
+      uploaded_at: Date;
+    }>;
     created_at: Date;
   }>(cacheKey);
 
@@ -86,8 +82,13 @@ export async function GET(
         receipts: {
           where: { deletedAt: null },
           orderBy: { uploadedAt: "desc" },
-          take: 1,
-          select: { fileUrl: true },
+          select: {
+            id: true,
+            originalName: true,
+            mimeType: true,
+            fileSize: true,
+            uploadedAt: true,
+          },
         },
       },
     });
@@ -104,7 +105,13 @@ export async function GET(
       overdue: payment.overdue,
       amount: Number(payment.amount),
       notes: payment.notes,
-      receipt_url: payment.receipts[0]?.fileUrl ?? null,
+      receipts: payment.receipts.map((r) => ({
+        id: r.id,
+        original_name: r.originalName,
+        mime_type: r.mimeType,
+        file_size: r.fileSize,
+        uploaded_at: r.uploadedAt,
+      })),
       created_at: payment.createdAt,
     };
 
@@ -124,14 +131,15 @@ export async function GET(
  * Administrative update of a payment record (Approval / Rejection flow).
  * Requires coordinator authentication.
  *
- * Allowed status transitions:
- *   under_review -> confirmed  (Approval - flow completed)
- *   under_review -> pending    (Rejection - resets status to pending for re-submission)
+ * State transition rules:
+ *   under_review -> confirmed  (Approval)
+ *   under_review -> rejected   (Rejection)
  *
- * Any other transition (e.g. pending -> confirmed, confirmed -> pending, etc.) is blocked.
+ * Closed flow: confirmed status is final and immutable.
+ * Direct transitions (e.g. pending -> confirmed) are strictly blocked.
  *
- * Body: { status?, overdue?, amount?, notes?, receipt_url? }
- * Returns: 200 { id, member_id, month_id, status, overdue, amount, notes, receipt_url, created_at }
+ * Body: { status?, overdue?, amount?, notes? }
+ * Returns: 200 { id, member_id, month_id, status, overdue, amount, notes, created_at }
  */
 export async function PATCH(
   request: NextRequest,
@@ -176,19 +184,19 @@ export async function PATCH(
 
     // 3. Status transition validation
     if (status !== undefined) {
-      // Only under_review -> confirmed or under_review -> pending is allowed
+      // Only under_review -> confirmed or under_review -> rejected is allowed
       if (
         existingPayment.status !== "under_review" ||
-        (status !== "confirmed" && status !== "pending")
+        (status !== "confirmed" && status !== "rejected")
       ) {
         return error(
-          "Invalid status transition. Status can only transition from under_review to confirmed or pending",
+          "Invalid status transition. Status can only transition from under_review to confirmed or rejected",
           400
         );
       }
     }
 
-    // 4. Perform update
+    // 4. Perform update (preserves all receipt records and files)
     const payment = await prisma.payment.update({
       where: { id },
       data: {
@@ -206,12 +214,6 @@ export async function PATCH(
         amount: true,
         notes: true,
         createdAt: true,
-        receipts: {
-          where: { deletedAt: null },
-          orderBy: { uploadedAt: "desc" },
-          take: 1,
-          select: { fileUrl: true },
-        },
       },
     });
 
@@ -226,7 +228,6 @@ export async function PATCH(
       overdue: payment.overdue,
       amount: Number(payment.amount),
       notes: payment.notes,
-      receipt_url: payment.receipts[0]?.fileUrl ?? null,
       created_at: payment.createdAt,
     });
   } catch (err) {
@@ -248,7 +249,7 @@ export async function PATCH(
 /**
  * DELETE /api/payments/:id
  *
- * Deletes a payment record and cleans up associated storage files.
+ * Deletes a payment record.
  * Requires coordinator authentication.
  *
  * Returns: 204 No Content
@@ -263,30 +264,6 @@ export async function DELETE(
   const { id } = await params;
 
   try {
-    const payment = await prisma.payment.findUnique({
-      where: { id },
-      select: {
-        receipts: {
-          where: { deletedAt: null },
-          select: { fileUrl: true },
-        },
-      },
-    });
-
-    if (!payment) {
-      return error("Payment not found", 404);
-    }
-
-    // Clean up associated files from storage if present
-    for (const r of payment.receipts) {
-      const storagePath = extractStoragePath(r.fileUrl);
-      if (storagePath) {
-        await removeReceiptFile(storagePath).catch((err) =>
-          console.error("[storage] Failed to remove file on payment delete:", err)
-        );
-      }
-    }
-
     await prisma.payment.delete({ where: { id } });
 
     cache.invalidate(CACHE_PREFIX);

@@ -21,6 +21,7 @@ enum PaymentStatus {
   pending
   under_review
   confirmed
+  rejected
 }
 
 model Coordinator {

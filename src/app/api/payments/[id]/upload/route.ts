@@ -1,26 +1,23 @@
 import type { NextRequest } from "next/server";
 import { success, error } from "@/lib/api/response";
-import {
-  validateReceiptFile,
-  uploadReceiptFile,
-  getReceiptSignedUrl,
-} from "@/lib/storage";
+import { validateReceiptFile, uploadReceiptFile } from "@/lib/storage";
 import prisma from "@/lib/prisma";
 
 /**
  * POST /api/payments/:id/upload
  *
- * Uploads a payment receipt file for a pending payment.
+ * Uploads a payment receipt file for a payment in pending or rejected status.
  * Public endpoint (no coordinator authentication required).
  *
  * Request: multipart/form-data with field `file`.
  *
  * Flow:
- * 1. Find payment (404 if not found)
- * 2. Validate status (must be pending)
- * 3. Validate file (size, mime type, magic bytes via validateReceiptFile helper)
- * 4. Compress image when necessary & upload to storage bucket (via uploadReceiptFile helper)
- * 5. Return signed URL for receipt (does NOT save receipt_url to DB yet)
+ * 1. Locate payment (404 if not found)
+ * 2. Validate status (allowed: pending, rejected; blocked: under_review, confirmed)
+ * 3. Validate file (size, mime type, magic bytes via validateReceiptFile)
+ * 4. Compress image when necessary & upload to storage bucket
+ * 5. Create a new Receipt record in database
+ * 6. Return created Receipt data ({ id, original_name, mime_type, file_size, uploaded_at })
  */
 export async function POST(
   request: NextRequest,
@@ -39,9 +36,12 @@ export async function POST(
       return error("Payment not found", 404);
     }
 
-    // 2. Validate status
-    if (payment.status !== "pending") {
-      return error("Payment is not in pending status", 400);
+    // 2. Validate status (Allowed: pending, rejected. Blocked: under_review, confirmed)
+    if (payment.status !== "pending" && payment.status !== "rejected") {
+      return error(
+        `Upload is not allowed when payment status is ${payment.status}`,
+        400
+      );
     }
 
     // Parse form data
@@ -63,7 +63,7 @@ export async function POST(
       return error(validation.message, 400);
     }
 
-    // 4 & 5. Compress (if image) and upload to storage bucket
+    // 4 & 5. Compress, upload to storage bucket, and create Receipt record
     const uploadResult = await uploadReceiptFile(
       id,
       file,
@@ -74,18 +74,13 @@ export async function POST(
       return error(uploadResult.message, 500);
     }
 
-    // Generate signed URL
-    const signedUrlResult = await getReceiptSignedUrl(
-      uploadResult.storagePath
-    );
-
-    if (!signedUrlResult.ok) {
-      return error(signedUrlResult.message, 500);
-    }
-
-    // 6. Return receipt URL
+    // 6. Return created Receipt data
     return success({
-      receipt_url: signedUrlResult.url,
+      id: uploadResult.receipt.id,
+      original_name: uploadResult.receipt.originalName,
+      mime_type: uploadResult.receipt.mimeType,
+      file_size: uploadResult.receipt.fileSize,
+      uploaded_at: uploadResult.receipt.uploadedAt,
     });
   } catch (err) {
     console.error("[POST /payments/:id/upload] Error:", err);

@@ -17,7 +17,9 @@ const MAX_LIMIT = 100;
 const createSchema = z.object({
   member_id: z.string().uuid("member_id must be a valid UUID"),
   month_id: z.string().uuid("month_id must be a valid UUID"),
-  status: z.enum(["pending", "under_review", "confirmed"]).optional(),
+  status: z
+    .enum(["pending", "under_review", "confirmed", "rejected"])
+    .optional(),
   overdue: z.boolean().optional(),
   amount: z.number().min(0, "amount must be positive").optional(),
   notes: z.string().nullable().optional(),
@@ -26,7 +28,9 @@ const createSchema = z.object({
 const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(MAX_LIMIT).default(10),
-  status: z.enum(["pending", "under_review", "confirmed"]).optional(),
+  status: z
+    .enum(["pending", "under_review", "confirmed", "rejected"])
+    .optional(),
   month_id: z.string().uuid("month_id must be a valid UUID").optional(),
   member_id: z.string().uuid("member_id must be a valid UUID").optional(),
 });
@@ -125,7 +129,7 @@ export async function POST(request: NextRequest): Promise<Response> {
  * Query params:
  *   - page      (default: 1)
  *   - limit     (default: 10, max: 100)
- *   - status    (optional, pending | under_review | confirmed)
+ *   - status    (optional, pending | under_review | confirmed | rejected)
  *   - month_id  (optional, UUID)
  *   - member_id (optional, UUID)
  *
@@ -183,12 +187,6 @@ export async function GET(request: NextRequest): Promise<Response> {
           amount: true,
           notes: true,
           createdAt: true,
-          receipts: {
-            where: { deletedAt: null },
-            orderBy: { uploadedAt: "desc" },
-            take: 1,
-            select: { fileUrl: true },
-          },
         },
         orderBy: { createdAt: "desc" },
         skip: (page - 1) * limit,
@@ -207,7 +205,6 @@ export async function GET(request: NextRequest): Promise<Response> {
         amount: { toNumber(): number } | number;
         notes: string | null;
         createdAt: Date;
-        receipts: { fileUrl: string }[];
       }) => ({
         id: p.id,
         member_id: p.memberId,
@@ -216,7 +213,6 @@ export async function GET(request: NextRequest): Promise<Response> {
         overdue: p.overdue,
         amount: Number(p.amount),
         notes: p.notes,
-        receipt_url: p.receipts[0]?.fileUrl ?? null,
         created_at: p.createdAt,
       })
     );
