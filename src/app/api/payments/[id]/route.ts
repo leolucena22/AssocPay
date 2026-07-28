@@ -4,6 +4,7 @@ import { getAuthenticatedCoordinator } from "@/lib/auth/auth";
 import { success } from "@/lib/api/success";
 import { error } from "@/lib/api/error";
 import { cache } from "@/lib/cache";
+import { getReceiptSignedUrl } from "@/lib/storage";
 import prisma from "@/lib/prisma";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -32,7 +33,7 @@ const updateSchema = z
 /**
  * GET /api/payments/:id
  *
- * Returns the detail of a single payment including all active receipts.
+ * Returns the detail of a single payment including all active receipts with signed URLs.
  * Publicly accessible endpoint.
  *
  * Returns: 200 { id, member_id, month_id, status, overdue, amount, notes, receipts: [...], created_at }
@@ -59,6 +60,7 @@ export async function GET(
       mime_type: string;
       file_size: number;
       uploaded_at: Date;
+      url: string | null;
     }>;
     created_at: Date;
   }>(cacheKey);
@@ -84,6 +86,7 @@ export async function GET(
           orderBy: { uploadedAt: "desc" },
           select: {
             id: true,
+            fileUrl: true,
             originalName: true,
             mimeType: true,
             fileSize: true,
@@ -97,6 +100,20 @@ export async function GET(
       return error("Payment not found", 404);
     }
 
+    const receipts = await Promise.all(
+      payment.receipts.map(async (r) => {
+        const signedResult = await getReceiptSignedUrl(r.fileUrl);
+        return {
+          id: r.id,
+          original_name: r.originalName,
+          mime_type: r.mimeType,
+          file_size: r.fileSize,
+          uploaded_at: r.uploadedAt,
+          url: signedResult.ok ? signedResult.url : null,
+        };
+      })
+    );
+
     const data = {
       id: payment.id,
       member_id: payment.memberId,
@@ -105,13 +122,7 @@ export async function GET(
       overdue: payment.overdue,
       amount: Number(payment.amount),
       notes: payment.notes,
-      receipts: payment.receipts.map((r) => ({
-        id: r.id,
-        original_name: r.originalName,
-        mime_type: r.mimeType,
-        file_size: r.fileSize,
-        uploaded_at: r.uploadedAt,
-      })),
+      receipts,
       created_at: payment.createdAt,
     };
 

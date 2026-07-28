@@ -1,7 +1,11 @@
 import type { NextRequest } from "next/server";
 import { success, error } from "@/lib/api/response";
-import { validateReceiptFile, uploadReceiptFile } from "@/lib/storage";
+import { validateReceiptFile, uploadReceiptFile, getReceiptSignedUrl } from "@/lib/storage";
+import { cache } from "@/lib/cache";
 import prisma from "@/lib/prisma";
+
+const CACHE_PREFIX = "payments:list:";
+const CACHE_DETAIL_PREFIX = "payments:detail:";
 
 /**
  * POST /api/payments/:id/upload
@@ -17,7 +21,7 @@ import prisma from "@/lib/prisma";
  * 3. Validate file (size, mime type, magic bytes via validateReceiptFile)
  * 4. Compress image when necessary & upload to storage bucket
  * 5. Create a new Receipt record in database
- * 6. Return created Receipt data ({ id, original_name, mime_type, file_size, uploaded_at })
+ * 6. Invalidate payment caches and return created Receipt data with signed URL
  */
 export async function POST(
   request: NextRequest,
@@ -74,6 +78,13 @@ export async function POST(
       return error(uploadResult.message, 500);
     }
 
+    // Invalidate payment caches
+    cache.invalidate(CACHE_PREFIX);
+    cache.invalidate(CACHE_DETAIL_PREFIX);
+
+    // Generate signed URL for immediate preview/access
+    const signedResult = await getReceiptSignedUrl(uploadResult.storagePath);
+
     // 6. Return created Receipt data
     return success({
       id: uploadResult.receipt.id,
@@ -81,6 +92,7 @@ export async function POST(
       mime_type: uploadResult.receipt.mimeType,
       file_size: uploadResult.receipt.fileSize,
       uploaded_at: uploadResult.receipt.uploadedAt,
+      url: signedResult.ok ? signedResult.url : null,
     });
   } catch (err) {
     console.error("[POST /payments/:id/upload] Error:", err);
