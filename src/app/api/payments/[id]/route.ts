@@ -4,6 +4,7 @@ import { getAuthenticatedCoordinator } from "@/lib/auth/auth";
 import { success } from "@/lib/api/success";
 import { error } from "@/lib/api/error";
 import { cache } from "@/lib/cache";
+import { removeReceiptFile } from "@/lib/storage";
 import prisma from "@/lib/prisma";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -25,6 +26,13 @@ const updateSchema = z
   .refine((data) => Object.keys(data).length > 0, {
     message: "at least one field must be provided",
   });
+
+// ─── Helper: extract storage path from signed/public URL ─────────────────────
+
+function extractStoragePath(url: string): string | null {
+  const match = url.match(/payments\/[^?]+/);
+  return match ? match[0] : null;
+}
 
 // ─── GET /api/payments/[id] ───────────────────────────────────────────────────
 
@@ -231,7 +239,7 @@ export async function PATCH(
 /**
  * DELETE /api/payments/:id
  *
- * Deletes a payment record.
+ * Deletes a payment record and cleans up associated storage files.
  * Requires coordinator authentication.
  *
  * Returns: 204 No Content
@@ -246,6 +254,25 @@ export async function DELETE(
   const { id } = await params;
 
   try {
+    const payment = await prisma.payment.findUnique({
+      where: { id },
+      select: { receiptUrl: true },
+    });
+
+    if (!payment) {
+      return error("Payment not found", 404);
+    }
+
+    // Clean up associated file from storage if present
+    if (payment.receiptUrl) {
+      const storagePath = extractStoragePath(payment.receiptUrl);
+      if (storagePath) {
+        await removeReceiptFile(storagePath).catch((err) =>
+          console.error("[storage] Failed to remove file on payment delete:", err)
+        );
+      }
+    }
+
     await prisma.payment.delete({ where: { id } });
 
     cache.invalidate(CACHE_PREFIX);

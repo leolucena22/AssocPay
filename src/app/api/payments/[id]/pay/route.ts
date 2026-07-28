@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 import { success, error } from "@/lib/api/response";
-import { RECEIPTS_BUCKET } from "@/lib/storage";
+import { RECEIPTS_BUCKET, removeReceiptFile } from "@/lib/storage";
 import { cache } from "@/lib/cache";
 import prisma from "@/lib/prisma";
 
@@ -17,6 +17,13 @@ const paySchema = z.object({
   receipt_url: z.string().url("receipt_url must be a valid URL"),
 });
 
+// ─── Helper: extract storage path from signed/public URL ─────────────────────
+
+function extractStoragePath(url: string): string | null {
+  const match = url.match(/payments\/[^?]+/);
+  return match ? match[0] : null;
+}
+
 // ─── POST /api/payments/[id]/pay ──────────────────────────────────────────────
 
 /**
@@ -31,8 +38,9 @@ const paySchema = z.object({
  * 2. Validate status (allowed: pending; blocked: under_review, confirmed)
  * 3. Validate receipt_url belongs to the receipts bucket and to this payment
  * 4. Prevent receipt reuse across different payments
- * 5. Update notes, receipt_url, and change status to under_review
- * 6. Return updated payment fields: { id, status, notes, receipt_url }
+ * 5. Clean up previous receipt file from storage if resubmitting after rejection
+ * 6. Update notes, receipt_url, and change status to under_review
+ * 7. Return updated payment fields: { id, status, notes, receipt_url }
  */
 export async function POST(
   request: NextRequest,
@@ -60,7 +68,7 @@ export async function POST(
     // 1. Locate payment & validate existence
     const payment = await prisma.payment.findUnique({
       where: { id },
-      select: { id: true, status: true },
+      select: { id: true, status: true, receiptUrl: true },
     });
 
     if (!payment) {
@@ -72,7 +80,15 @@ export async function POST(
       return error("Payment is not in pending status", 400);
     }
 
-    // 3. Validate that receipt_url belongs to configured bucket & this payment
+    // 3. Validate that receipt_url belongs to domain (if configured), bucket & this payment
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    if (supabaseUrl && !receipt_url.startsWith(supabaseUrl)) {
+      return error(
+        "Receipt URL does not belong to the configured storage service",
+        400
+      );
+    }
+
     if (!receipt_url.includes(`/${RECEIPTS_BUCKET}/`)) {
       return error("Receipt URL does not belong to the configured bucket", 400);
     }
@@ -90,10 +106,24 @@ export async function POST(
     });
 
     if (existingReceipt) {
-      return error("Receipt URL has already been used for another payment", 400);
+      return error(
+        "Receipt URL has already been used for another payment",
+        400
+      );
     }
 
-    // 5. Update payment details & change status to under_review
+    // 5. Clean up old receipt file from storage if previously rejected and resubmitting a new one
+    if (payment.receiptUrl && payment.receiptUrl !== receipt_url) {
+      const oldStoragePath = extractStoragePath(payment.receiptUrl);
+      if (oldStoragePath) {
+        // Fire and forget removal — non-blocking, error logged internally
+        removeReceiptFile(oldStoragePath).catch((err) =>
+          console.error("[storage] Clean up old file error:", err)
+        );
+      }
+    }
+
+    // 6. Update payment details & change status to under_review
     const updatedPayment = await prisma.payment.update({
       where: { id },
       data: {
@@ -113,7 +143,7 @@ export async function POST(
     cache.invalidate(CACHE_PREFIX);
     cache.invalidate(CACHE_DETAIL_PREFIX);
 
-    // 6. Return response
+    // 7. Return response
     return success({
       id: updatedPayment.id,
       status: updatedPayment.status,
